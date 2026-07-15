@@ -35,10 +35,7 @@
 
     <PropertyGroup>
         <OutputDir>../OutputFinal</OutputDir>
-        <!-- todo macOS -->
-        <GamePath Condition="'$(OS)' == 'Windows_NT'">C:/Program Files (x86)/Steam/steamapps/common/Hollow Knight</GamePath>
-        <GamePath Condition="'$(OS)' != 'Windows_NT'">$(HOME)/.local/share/Steam/steamapps/common/Hollow Knight</GamePath>
-        <CopyDir>$(GamePath)/hollow_knight_Data/Managed</CopyDir>
+        <CopyDir />
 
         <Mono Condition="$(OS) == WINDOWS_NT" />
         <Mono Condition="$(OS) != WINDOWS_NT">mono</Mono>
@@ -173,8 +170,6 @@
     <ItemGroup>
         <Reference Include="../Vanilla/Assembly-CSharp.dll"/>
         <Reference Include="../Vanilla/TeamCherry.*.dll"/>
-        <!--<Reference Include="../Vanilla/mscorlib.dll"/>-->
-        <Reference Include="../override/mscorlib.dll"/>
         <Reference Include="../Vanilla/netstandard.dll"/>
         <Reference Include="../Vanilla/Newtonsoft.Json.dll"/>
         <Reference Include="../Vanilla/PlayMaker.dll"/>

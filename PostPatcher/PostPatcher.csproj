@@ -18,10 +18,10 @@
         <DebugType Condition=" '$(Configuration)' == 'Release' ">pdbonly</DebugType>
     </PropertyGroup>
 
-    <ItemGroup>
-        <TargetDirFiles Include="$(TargetDir)/**" />
-    </ItemGroup>
     <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+        <ItemGroup>
+            <TargetDirFiles Include="$(TargetDir)/**" />
+        </ItemGroup>
         <MakeDir Directories="$(ProjectDir)Output" />
         <Copy SourceFiles="@(TargetDirFiles)" DestinationFolder="$(ProjectDir)Output" />
     </Target>
