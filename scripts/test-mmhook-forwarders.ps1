@@ -14,6 +14,22 @@ function Assert-True {
     }
 }
 
+function Invoke-PrePatcher {
+    param([string]$Executable, [string]$TargetPath, [string]$SourcePath)
+
+    if ($IsWindows) {
+        & $Executable --mmhook $TargetPath $SourcePath
+        return
+    }
+
+    $mono = Get-Command mono -CommandType Application -ErrorAction SilentlyContinue
+    if (-not $mono) {
+        throw 'mono is required to run PrePatcher.exe on non-Windows platforms.'
+    }
+
+    & $mono.Source $Executable --mmhook $TargetPath $SourcePath
+}
+
 function Get-ForwarderCount {
     param([string]$TargetPath, [string]$SourcePath)
 
@@ -62,7 +78,7 @@ foreach ($sourceName in $sourceNames) {
 }
 
 if ($VerifyIdempotence) {
-    $prePatcher = Join-Path (Split-Path $PSScriptRoot -Parent) 'PrePatcher\Output\PrePatcher.exe'
+    $prePatcher = [IO.Path]::Combine((Split-Path $PSScriptRoot -Parent), 'PrePatcher', 'Output', 'PrePatcher.exe')
     Assert-True (Test-Path -LiteralPath $prePatcher -PathType Leaf) "missing PrePatcher '$prePatcher'"
     $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("hk-mmhook-forwarder-test-{0}" -f [guid]::NewGuid().ToString('N'))
     try {
@@ -74,12 +90,12 @@ if ($VerifyIdempotence) {
 
         $copyTarget = Join-Path $tempRoot 'MMHOOK_Assembly-CSharp.dll'
         foreach ($sourceName in $sourceNames) {
-            & $prePatcher --mmhook $copyTarget (Join-Path $tempRoot $sourceName)
+            Invoke-PrePatcher -Executable $prePatcher -TargetPath $copyTarget -SourcePath (Join-Path $tempRoot $sourceName)
             Assert-True ($LASTEXITCODE -eq 0) "first idempotence pass should succeed for $sourceName"
         }
         $firstHash = (Get-FileHash -LiteralPath $copyTarget -Algorithm SHA256).Hash
         foreach ($sourceName in $sourceNames) {
-            & $prePatcher --mmhook $copyTarget (Join-Path $tempRoot $sourceName)
+            Invoke-PrePatcher -Executable $prePatcher -TargetPath $copyTarget -SourcePath (Join-Path $tempRoot $sourceName)
             Assert-True ($LASTEXITCODE -eq 0) "second idempotence pass should succeed for $sourceName"
         }
         $secondHash = (Get-FileHash -LiteralPath $copyTarget -Algorithm SHA256).Hash
