@@ -31,12 +31,13 @@ The complete package is written to `OutputFinal`. A normal build does not modify
 To inspect, install, or restore a local game explicitly, use the deployment script:
 
 ```powershell
-pwsh -NoProfile -File '.\scripts\local-deploy.ps1' -Action Status
-pwsh -NoProfile -File '.\scripts\local-deploy.ps1' -Action Install
-pwsh -NoProfile -File '.\scripts\local-deploy.ps1' -Action Restore
+$gamePath = '<Hollow Knight install path>'
+pwsh -NoProfile -File '.\scripts\local-deploy.ps1' -Action Status -GamePath $gamePath
+pwsh -NoProfile -File '.\scripts\local-deploy.ps1' -Action Install -GamePath $gamePath
+pwsh -NoProfile -File '.\scripts\local-deploy.ps1' -Action Restore -GamePath $gamePath
 ```
 
-Pass `-GamePath`, `-OutputPath`, `-BackupRoot`, or `-BackupPath` when the defaults do not apply.
+Set `HK_GAME_PATH` instead of passing `-GamePath` on every command. Pass `-OutputPath`, `-BackupRoot`, or `-BackupPath` when their defaults do not apply.
 
 License
 =======

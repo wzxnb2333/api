@@ -25,6 +25,28 @@ function Get-Hash {
     (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
 }
 
+function Get-DeploymentLockPath {
+    param([string]$GamePath)
+
+    $normalized = [IO.Path]::GetFullPath($GamePath).TrimEnd('\').ToUpperInvariant()
+    $bytes = [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($normalized))
+    $name = -join ($bytes | ForEach-Object { $_.ToString('x2') })
+    Join-Path ([IO.Path]::GetTempPath()) "HollowKnight.ModdingAPI-locks\$name.lock"
+}
+
+function Try-NewJunction {
+    param([string]$Path, [string]$Target)
+
+    try {
+        New-Item -ItemType Junction -Path $Path -Target $Target -Force -ErrorAction Stop | Out-Null
+        $true
+    }
+    catch {
+        [Console]::WriteLine("SKIP: reparse-point test unavailable: $($_.Exception.Message)")
+        $false
+    }
+}
+
 function Invoke-Deploy {
     param(
         [string]$Action,
@@ -56,7 +78,7 @@ function Assert-DeployFails {
         & $script:DeployScript @Arguments | Out-Null
     }
     catch {
-        Assert-True ($_.Exception.Message -like "*$ExpectedMessage*") "failure should mention '$ExpectedMessage'"
+        Assert-True ($_.Exception.Message -like "*$ExpectedMessage*") "failure '$($_.Exception.Message)' should mention '$ExpectedMessage'"
         return
     }
 
@@ -141,6 +163,76 @@ try {
     New-FakeOutput -Path $outputPath
     New-FakeLegacyZip -Path $legacyZip -StagingPath (Join-Path $tempRoot 'legacy')
 
+    $extraGame = Join-Path $tempRoot 'extra-game'
+    $extraOutput = Join-Path $tempRoot 'extra-output'
+    $extraBackups = Join-Path $tempRoot 'extra-backups'
+    New-FakeGame -Path $extraGame -VanillaPath $vanillaPath
+    New-FakeOutput -Path $extraOutput
+    Set-Content -LiteralPath (Join-Path $extraOutput 'unexpected.dll') -Value 'must not deploy' -NoNewline
+    Assert-DeployFails -Arguments @{
+        Action = 'Install'; GamePath = $extraGame; OutputPath = $extraOutput
+        BackupRoot = $extraBackups; LegacyDebugModZip = $legacyZip
+    } -ExpectedMessage 'unexpected'
+    Assert-Equal (Get-Hash (Join-Path $vanillaPath 'Assembly-CSharp.dll')) (Get-Hash (Join-Path $extraGame 'hollow_knight_Data\Managed\Assembly-CSharp.dll')) 'extra output rejection must not modify the game'
+
+    $lockGame = Join-Path $tempRoot 'lock-game'
+    $lockOutput = Join-Path $tempRoot 'lock-output'
+    $lockBackups = Join-Path $tempRoot 'lock-backups'
+    New-FakeGame -Path $lockGame -VanillaPath $vanillaPath
+    New-FakeOutput -Path $lockOutput
+    $lockPath = Get-DeploymentLockPath $lockGame
+    New-Item -ItemType Directory -Path (Split-Path $lockPath -Parent) -Force | Out-Null
+    $lockStream = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    try {
+        Assert-DeployFails -Arguments @{
+            Action = 'Install'; GamePath = $lockGame; OutputPath = $lockOutput
+            BackupRoot = $lockBackups; LegacyDebugModZip = $legacyZip
+        } -ExpectedMessage 'already running'
+    }
+    finally {
+        $lockStream.Dispose()
+    }
+
+    $junctionTargetGame = Join-Path $tempRoot 'junction-target-game'
+    $junctionTargetOutput = Join-Path $tempRoot 'junction-target-output'
+    $junctionTargetBackups = Join-Path $tempRoot 'junction-target-backups'
+    $junctionTargetOutside = Join-Path $tempRoot 'junction-target-outside'
+    New-FakeGame -Path $junctionTargetGame -VanillaPath $vanillaPath
+    New-FakeOutput -Path $junctionTargetOutput
+    New-Item -ItemType Directory -Path $junctionTargetOutside -Force | Out-Null
+    $modsJunction = Join-Path $junctionTargetGame 'hollow_knight_Data\Managed\Mods'
+    if (Try-NewJunction -Path $modsJunction -Target $junctionTargetOutside) {
+        try {
+            Assert-DeployFails -Arguments @{
+                Action = 'Install'; GamePath = $junctionTargetGame; OutputPath = $junctionTargetOutput
+                BackupRoot = $junctionTargetBackups; LegacyDebugModZip = $legacyZip
+            } -ExpectedMessage 'reparse point'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $junctionTargetOutside 'DebugMod\DebugMod.dll'))) 'target junction rejection must not write through the junction'
+        }
+        finally {
+            Remove-Item -LiteralPath $modsJunction -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $junctionBackupGame = Join-Path $tempRoot 'junction-backup-game'
+    $junctionBackupOutput = Join-Path $tempRoot 'junction-backup-output'
+    $junctionBackupRoot = Join-Path $tempRoot 'junction-backup-root'
+    $junctionBackupOutside = Join-Path $tempRoot 'junction-backup-outside'
+    New-FakeGame -Path $junctionBackupGame -VanillaPath $vanillaPath
+    New-FakeOutput -Path $junctionBackupOutput
+    New-Item -ItemType Directory -Path $junctionBackupOutside -Force | Out-Null
+    if (Try-NewJunction -Path $junctionBackupRoot -Target $junctionBackupOutside) {
+        try {
+            Assert-DeployFails -Arguments @{
+                Action = 'Install'; GamePath = $junctionBackupGame; OutputPath = $junctionBackupOutput
+                BackupRoot = $junctionBackupRoot; LegacyDebugModZip = $legacyZip
+            } -ExpectedMessage 'reparse point'
+        }
+        finally {
+            Remove-Item -LiteralPath $junctionBackupRoot -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     $originalAssemblyHash = Get-Hash (Join-Path $gamePath 'hollow_knight_Data\Managed\Assembly-CSharp.dll')
     $installOutput = Invoke-Deploy -Action Install -GamePath $gamePath -OutputPath $outputPath -BackupRoot $backupRoot -LegacyDebugModZip $legacyZip
     Assert-True ($installOutput -like '*Installed*') 'install should report Installed'
@@ -149,6 +241,7 @@ try {
     $manifestPath = Join-Path $backupPath 'manifest.json'
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     Assert-Equal 'Installed' $manifest.Status 'manifest status after install'
+    Assert-Equal 20 @($manifest.Files).Count 'manifest should contain the exact deployment allowlist'
     Assert-True (Test-Path -LiteralPath (Join-Path $backupPath 'LocalLow\user1.dat')) 'LocalLow snapshot should be backed up'
     Assert-Equal (Get-Hash (Join-Path $outputPath 'Assembly-CSharp.dll')) (Get-Hash (Join-Path $gamePath 'hollow_knight_Data\Managed\Assembly-CSharp.dll')) 'patched Assembly-CSharp should be installed'
 
@@ -157,6 +250,62 @@ try {
     Assert-True (Test-Path -LiteralPath (Join-Path $modPath 'DebugMod.pdb')) 'legacy PDB should be installed'
     Assert-True (Test-Path -LiteralPath (Join-Path $modPath 'DebugMod.xml')) 'legacy XML should be installed'
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $modPath 'README.md'))) 'legacy README should not be installed'
+
+    $bepInExVictim = Join-Path $gamePath 'BepInEx\config\victim.cfg'
+    New-Item -ItemType Directory -Path (Split-Path $bepInExVictim -Parent) -Force | Out-Null
+    Set-Content -LiteralPath $bepInExVictim -Value 'must survive' -NoNewline
+    $maliciousBackup = Join-Path $tempRoot 'malicious-backup'
+    Copy-Item -LiteralPath $backupPath -Destination $maliciousBackup -Recurse
+    $maliciousManifestPath = Join-Path $maliciousBackup 'manifest.json'
+    $maliciousManifest = Get-Content -LiteralPath $maliciousManifestPath -Raw | ConvertFrom-Json
+    $maliciousManifest.Files[0].RelativePath = '..\..\BepInEx\config\victim.cfg'
+    $maliciousManifest.Files[0].ExistedBefore = $false
+    $maliciousManifest.Files[0].OriginalSha256 = $null
+    $maliciousManifest.Files[0].InstalledSha256 = Get-Hash $bepInExVictim
+    $maliciousManifest.Files[0].BackupRelativePath = $null
+    $maliciousManifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $maliciousManifestPath -Encoding utf8
+    Assert-DeployFails -Arguments @{
+        Action = 'Restore'; GamePath = $gamePath; OutputPath = $outputPath; BackupRoot = $backupRoot
+        LegacyDebugModZip = $legacyZip; BackupPath = $maliciousBackup
+    } -ExpectedMessage 'manifest'
+    Assert-True (Test-Path -LiteralPath $bepInExVictim -PathType Leaf) 'forged manifest must not touch BepInEx'
+
+    $badSchemaBackup = Join-Path $tempRoot 'bad-schema-backup'
+    Copy-Item -LiteralPath $backupPath -Destination $badSchemaBackup -Recurse
+    $badSchemaManifestPath = Join-Path $badSchemaBackup 'manifest.json'
+    $badSchemaManifest = Get-Content -LiteralPath $badSchemaManifestPath -Raw | ConvertFrom-Json
+    $badSchemaManifest.SchemaVersion = 2
+    $badSchemaManifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $badSchemaManifestPath -Encoding utf8
+    Assert-DeployFails -Arguments @{
+        Action = 'Restore'; GamePath = $gamePath; OutputPath = $outputPath; BackupRoot = $backupRoot
+        LegacyDebugModZip = $legacyZip; BackupPath = $badSchemaBackup
+    } -ExpectedMessage 'SchemaVersion'
+
+    $teamCherryEntry = @($manifest.Files | Where-Object RelativePath -eq 'TeamCherry.Localization.dll')
+    Assert-Equal 1 $teamCherryEntry.Count 'manifest should contain one TeamCherry.Localization entry'
+    $teamCherryBackup = Join-Path $backupPath $teamCherryEntry[0].BackupRelativePath
+    Add-Content -LiteralPath $teamCherryBackup -Value 'corrupt' -NoNewline
+    $installedAssemblyHash = Get-Hash (Join-Path $gamePath 'hollow_knight_Data\Managed\Assembly-CSharp.dll')
+    Assert-DeployFails -Arguments @{
+        Action = 'Restore'; GamePath = $gamePath; OutputPath = $outputPath; BackupRoot = $backupRoot
+        LegacyDebugModZip = $legacyZip; BackupPath = $backupPath
+    } -ExpectedMessage 'corrupt'
+    Assert-Equal $installedAssemblyHash (Get-Hash (Join-Path $gamePath 'hollow_knight_Data\Managed\Assembly-CSharp.dll')) 'restore preflight failure must not modify earlier files'
+    Copy-Item -LiteralPath (Join-Path $vanillaPath 'TeamCherry.Localization.dll') -Destination $teamCherryBackup -Force
+
+    $manifestLock = [IO.File]::Open($manifestPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    try {
+        Assert-DeployFails -Arguments @{
+            Action = 'Restore'; GamePath = $gamePath; OutputPath = $outputPath; BackupRoot = $backupRoot
+            LegacyDebugModZip = $legacyZip; BackupPath = $backupPath
+        } -ExpectedMessage 'installed state was recovered'
+    }
+    finally {
+        $manifestLock.Dispose()
+    }
+    foreach ($entry in @($manifest.Files)) {
+        Assert-Equal $entry.InstalledSha256 (Get-Hash (Join-Path $gamePath "hollow_knight_Data\Managed\$($entry.RelativePath)")) "execution failure should roll back '$($entry.RelativePath)'"
+    }
 
     $status = Invoke-Deploy -Action Status -GamePath $gamePath -OutputPath $outputPath -BackupRoot $backupRoot -LegacyDebugModZip $legacyZip
     Assert-True ($status -like '*Installed*') 'status should report Installed'
@@ -185,33 +334,13 @@ try {
     Assert-True (-not (Test-Path -LiteralPath $modPath)) 'restore should remove empty legacy mod directory'
     Assert-Equal 'save after install' (Get-Content -LiteralPath (Join-Path $localLow 'user1.dat') -Raw) 'restore must not overwrite LocalLow'
 
-    $outsidePath = Join-Path $tempRoot 'outside.txt'
-    Set-Content -LiteralPath $outsidePath -Value 'must survive' -NoNewline
-    $maliciousBackup = Join-Path $tempRoot 'malicious-backup'
-    New-Item -ItemType Directory -Path $maliciousBackup -Force | Out-Null
-    [pscustomobject]@{
-        SchemaVersion = 1
-        Status = 'Installed'
-        GamePath = $gamePath
-        Files = @([pscustomobject]@{
-            RelativePath = '..\outside.txt'
-            ExistedBefore = $false
-            OriginalSha256 = $null
-            InstalledSha256 = Get-Hash $outsidePath
-            BackupRelativePath = $null
-        })
-    } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $maliciousBackup 'manifest.json') -Encoding utf8
-    Assert-DeployFails -Arguments @{
-        Action = 'Restore'; GamePath = $gamePath; OutputPath = $outputPath; BackupRoot = $backupRoot
-        LegacyDebugModZip = $legacyZip; BackupPath = $maliciousBackup
-    } -ExpectedMessage 'outside game path'
-    Assert-True (Test-Path -LiteralPath $outsidePath -PathType Leaf) 'restore must not touch paths outside the game'
-
     $rollbackGame = Join-Path $tempRoot 'rollback-game'
     $rollbackOutput = Join-Path $tempRoot 'rollback-output'
     $rollbackBackups = Join-Path $tempRoot 'rollback-backups'
     New-FakeGame -Path $rollbackGame -VanillaPath $vanillaPath
-    New-FakeOutput -Path $rollbackOutput -BreakLegacyDirectory
+    New-FakeOutput -Path $rollbackOutput
+    $rollbackBlocker = Join-Path $rollbackGame 'hollow_knight_Data\Managed\Mods'
+    Set-Content -LiteralPath $rollbackBlocker -Value 'blocks mod directory creation' -NoNewline
     $rollbackAssembly = Join-Path $rollbackGame 'hollow_knight_Data\Managed\Assembly-CSharp.dll'
     $rollbackOriginalHash = Get-Hash $rollbackAssembly
 
@@ -221,9 +350,9 @@ try {
     } -ExpectedMessage 'rolled back'
     Assert-Equal $rollbackOriginalHash (Get-Hash $rollbackAssembly) 'failed install should restore overwritten files'
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $rollbackGame 'hollow_knight_Data\Managed\MMHOOK_PlayMaker.dll'))) 'failed install should delete newly added files'
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $rollbackGame 'hollow_knight_Data\Managed\Mods'))) 'failed install should remove blocking output file'
+    Assert-True (Test-Path -LiteralPath $rollbackBlocker -PathType Leaf) 'failed install must preserve an unrelated blocking file'
 
-    'PASS: local deployment install, status, drift protection, restore, LocalLow preservation, and rollback'
+    'PASS: local deployment validation, locking, install, status, drift protection, restore, LocalLow preservation, and rollback'
 }
 finally {
     $env:LOCALAPPDATA = $oldLocalAppData
