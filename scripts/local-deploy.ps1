@@ -594,7 +594,7 @@ function Install-Api {
     $outputFiles = Get-OutputFiles
     Assert-NoReparsePoint -Path $BackupRoot -Description 'Backup root'
     New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null
-    $backupDirectory = Join-Path $BackupRoot ("1.5.12620-{0}" -f (Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
+    $backupDirectory = Join-Path $BackupRoot ("1.5.12620-{0}-{1}" -f (Get-Date -Format 'yyyyMMdd-HHmmss-fff'), [guid]::NewGuid().ToString('N'))
     Assert-NoReparsePoint -Path $backupDirectory -Description 'Backup directory'
     $gameBackupDirectory = Join-Path $backupDirectory 'GameFiles'
     $legacyStaging = Join-Path $backupDirectory 'Staging\DebugMod'
@@ -805,12 +805,22 @@ function Get-DeploymentStatus {
         }
     }
     else {
+        $vanillaPath = Join-Path $repoRoot 'Vanilla'
+        $deploymentMarkers = @($requiredManifestFiles | Where-Object {
+            $vanillaFile = Resolve-SafeChildPath -BasePath $vanillaPath -RelativePath $_ -Description 'Vanilla file'
+            $managedFile = Resolve-SafeChildPath -BasePath $managed -RelativePath $_ -Description 'Deployment marker'
+            -not (Test-Path -LiteralPath $vanillaFile -PathType Leaf) -and
+                (Test-Path -LiteralPath $managedFile -PathType Leaf)
+        })
         try {
             Assert-VanillaGameFiles $managed
+            if ($deploymentMarkers.Count -gt 0) {
+                $state = 'Partial'
+                $detail = "$($deploymentMarkers.Count) deployment marker(s) remain without an active manifest."
+            }
         }
         catch {
-            $apiMarkers = @($requiredOutputFiles | Where-Object { Test-Path -LiteralPath (Join-Path $managed $_) -PathType Leaf })
-            $state = if ($apiMarkers.Count -gt 0) { 'Partial' } else { 'Drifted' }
+            $state = if ($deploymentMarkers.Count -gt 0) { 'Partial' } else { 'Drifted' }
             $detail = $_.Exception.Message
         }
     }

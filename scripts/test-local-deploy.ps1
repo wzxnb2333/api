@@ -237,7 +237,10 @@ try {
     $installOutput = Invoke-Deploy -Action Install -GamePath $gamePath -OutputPath $outputPath -BackupRoot $backupRoot -LegacyDebugModZip $legacyZip
     Assert-True ($installOutput -like '*Installed*') 'install should report Installed'
 
-    $backupPath = Get-ChildItem -LiteralPath $backupRoot -Directory | Select-Object -First 1 -ExpandProperty FullName
+    $installedLine = @($installOutput -split '\r?\n' | Where-Object { $_ -like 'Installed:*' })
+    Assert-Equal 1 $installedLine.Count 'install should return exactly one backup directory'
+    $backupPath = $installedLine[0].Substring('Installed:'.Length).Trim()
+    Assert-True ((Split-Path $backupPath -Leaf) -match '[0-9a-fA-F]{32}$') 'install backup directory should end with a 32-character hexadecimal GUID'
     $manifestPath = Join-Path $backupPath 'manifest.json'
     $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     Assert-Equal 'Installed' $manifest.Status 'manifest status after install'
@@ -333,6 +336,27 @@ try {
     Assert-True (-not (Test-Path -LiteralPath $hookPath)) 'restore should delete newly added API files'
     Assert-True (-not (Test-Path -LiteralPath $modPath)) 'restore should remove empty legacy mod directory'
     Assert-Equal 'save after install' (Get-Content -LiteralPath (Join-Path $localLow 'user1.dat') -Raw) 'restore must not overwrite LocalLow'
+
+    $restoredManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    Assert-Equal 'Restored' $restoredManifest.Status 'restored manifest should no longer be active'
+    Assert-Equal (Get-Hash (Join-Path $vanillaPath 'Assembly-CSharp.dll')) (Get-Hash $assemblyPath) 'residual-file status test requires vanilla Assembly-CSharp'
+    $teamCherryPath = Join-Path $gamePath 'hollow_knight_Data\Managed\TeamCherry.Localization.dll'
+    Assert-Equal (Get-Hash (Join-Path $vanillaPath 'TeamCherry.Localization.dll')) (Get-Hash $teamCherryPath) 'residual-file status test requires vanilla TeamCherry.Localization'
+
+    Copy-Item -LiteralPath (Join-Path $outputPath 'MMHOOK_PlayMaker.dll') -Destination $hookPath
+    $status = Invoke-Deploy -Action Status -GamePath $gamePath -OutputPath $outputPath -BackupRoot $backupRoot -LegacyDebugModZip $legacyZip
+    Assert-True ($status -like '*Partial*') 'status should report Partial when a restored game retains an MMHOOK file'
+    Remove-Item -LiteralPath $hookPath
+    $status = Invoke-Deploy -Action Status -GamePath $gamePath -OutputPath $outputPath -BackupRoot $backupRoot -LegacyDebugModZip $legacyZip
+    Assert-True ($status -like '*Vanilla*') 'status should report Vanilla only after the residual MMHOOK file is removed'
+
+    New-Item -ItemType Directory -Path $modPath -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $tempRoot 'legacy\DebugMod.dll') -Destination $modPath
+    $status = Invoke-Deploy -Action Status -GamePath $gamePath -OutputPath $outputPath -BackupRoot $backupRoot -LegacyDebugModZip $legacyZip
+    Assert-True ($status -like '*Partial*') 'status should report Partial when a restored game retains a DebugMod file'
+    Remove-Item -LiteralPath $modPath -Recurse -Force
+    $status = Invoke-Deploy -Action Status -GamePath $gamePath -OutputPath $outputPath -BackupRoot $backupRoot -LegacyDebugModZip $legacyZip
+    Assert-True ($status -like '*Vanilla*') 'status should report Vanilla only after all deployment remnants are removed'
 
     $rollbackGame = Join-Path $tempRoot 'rollback-game'
     $rollbackOutput = Join-Path $tempRoot 'rollback-output'

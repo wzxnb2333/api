@@ -409,6 +409,14 @@ namespace Modding.Patches
 
         #endregion
 
+        private extern void orig_LevelActivated(Scene sceneFrom, Scene sceneTo);
+        private void LevelActivated(Scene sceneFrom, Scene sceneTo)
+        {
+            if (sceneTo.name == "Quit_To_Menu") return;
+
+            orig_LevelActivated(sceneFrom, sceneTo);
+        }
+
         extern public void orig_SetupSceneRefs(bool refreshTilemapInfo);
         public void SetupSceneRefs(bool refreshTilemapInfo)
         {

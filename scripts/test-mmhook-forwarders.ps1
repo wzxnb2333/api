@@ -55,6 +55,9 @@ function Get-ForwarderCount {
         foreach ($type in $sourceTypes) {
             $matches = @($forwarders | Where-Object { $_.Namespace -eq $type.Namespace -and $_.Name -eq $type.Name })
             Assert-True ($matches.Count -eq 1) "MMHOOK_Assembly-CSharp.dll should forward $($type.FullName) exactly once to $sourceAssemblyName"
+            $requiredAttributes = [Mono.Cecil.TypeAttributes]::Public -bor [Mono.Cecil.TypeAttributes]::Forwarder
+            Assert-True (($matches[0].Attributes -band $requiredAttributes) -eq $requiredAttributes) `
+                "MMHOOK_Assembly-CSharp.dll forwarder $($type.FullName) should be Public | Forwarder"
         }
         $sourceTypes.Count
     }

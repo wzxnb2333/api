@@ -63,6 +63,8 @@ namespace Prepatcher
             MethodDefinition setVector3SwappedArgs = GenerateSwappedMethod(pd, pdSetVector3);
             MethodDefinition setVariableSwappedArgs = GenerateSwappedMethod(pd, pdSetVariable);
 
+            changes += AddLegacyInvulnerableHook(module);
+
             foreach (TypeDefinition type in module.Types.Where(type => type.HasMethods))
             {
                 foreach (MethodDefinition method in GetMethodsRecursively(type))
@@ -152,6 +154,69 @@ namespace Prepatcher
             return 0;
         }
 
+        private static int AddLegacyInvulnerableHook(ModuleDefinition module)
+        {
+            TypeDefinition heroController = module.GetType("", "HeroController")
+                ?? throw new InvalidOperationException("HeroController type not found");
+
+            if (heroController.Methods.Any(method =>
+                method.Name == "Invulnerable"
+                && method.Parameters.Count == 1
+                && method.Parameters[0].ParameterType.MetadataType == MetadataType.Single))
+            {
+                return 0;
+            }
+
+            MethodDefinition core = heroController.Methods.Single(method =>
+                method.Name == "Invulnerable" && method.Parameters.Count == 0);
+            MethodDefinition start = heroController.Methods.Single(method =>
+                method.Name == "StartInvulnerable"
+                && method.Parameters.Count == 1
+                && method.Parameters[0].ParameterType.MetadataType == MetadataType.Single);
+            FieldDefinition durationField = heroController.Fields.Single(field =>
+                field.Name == "invulnerableDuration"
+                && field.FieldType.MetadataType == MetadataType.Single);
+            Instruction call = start.Body.Instructions.Single(instruction =>
+                instruction.Operand is MethodReference method
+                && method.DeclaringType.FullName == heroController.FullName
+                && method.Name == "Invulnerable"
+                && method.Parameters.Count == 0);
+
+            core.Name = "InvulnerableCore";
+
+            MethodDefinition compatibilityMethod = new
+            (
+                "Invulnerable",
+                core.Attributes,
+                core.ReturnType
+            )
+            {
+                CallingConvention = core.CallingConvention,
+                ExplicitThis = core.ExplicitThis,
+                HasThis = core.HasThis
+            };
+            compatibilityMethod.Parameters.Add
+            (
+                new ParameterDefinition("duration", ParameterAttributes.None, module.TypeSystem.Single)
+            );
+
+            ILProcessor compatibilityIL = compatibilityMethod.Body.GetILProcessor();
+            compatibilityIL.Emit(OpCodes.Ldarg_0);
+            compatibilityIL.Emit(OpCodes.Ldarg_1);
+            compatibilityIL.Emit(OpCodes.Stfld, durationField);
+            compatibilityIL.Emit(OpCodes.Ldarg_0);
+            compatibilityIL.Emit(OpCodes.Call, core);
+            compatibilityIL.Emit(OpCodes.Ret);
+            heroController.Methods.Add(compatibilityMethod);
+
+            ILProcessor startIL = start.Body.GetILProcessor();
+            startIL.InsertBefore(call, Instruction.Create(OpCodes.Ldarg_1));
+            call.Operand = compatibilityMethod;
+            start.Body.MaxStackSize = Math.Max(start.Body.MaxStackSize, 4);
+
+            return 1;
+        }
+
         private static int PatchMMHook(string targetPath, string sourcePath)
         {
             string targetFull = Path.GetFullPath(targetPath);
@@ -216,7 +281,7 @@ namespace Prepatcher
                     {
                         ExportedType exported = new(type.Namespace, type.Name, target, sourceReference)
                         {
-                            Attributes = Mono.Cecil.TypeAttributes.Forwarder
+                            Attributes = Mono.Cecil.TypeAttributes.Public | Mono.Cecil.TypeAttributes.Forwarder
                         };
                         target.ExportedTypes.Add(exported);
                     }
