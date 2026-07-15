@@ -69,6 +69,8 @@
         <Exec Condition="!Exists('$(TargetDir)MMHOOK_TeamCherry.NestedFadeGroup.dll')" WorkingDirectory="@(BuildDir)" Command="$(Mono) &quot;$(TargetDir)MonoMod.RuntimeDetour.HookGen.exe&quot; --private TeamCherry.NestedFadeGroup.dll" />
         <Exec Condition="!Exists('$(TargetDir)MMHOOK_TeamCherry.SharedUtils.dll')" WorkingDirectory="@(BuildDir)" Command="$(Mono) &quot;$(TargetDir)MonoMod.RuntimeDetour.HookGen.exe&quot; --private TeamCherry.SharedUtils.dll" />
         <Exec Condition="!Exists('$(TargetDir)MMHOOK_TeamCherry.TK2D.dll')" WorkingDirectory="@(BuildDir)" Command="$(Mono) &quot;$(TargetDir)MonoMod.RuntimeDetour.HookGen.exe&quot; --private TeamCherry.TK2D.dll" />
+        <Exec WorkingDirectory="@(BuildDir)" Command="$(Mono) &quot;$(MSBuildProjectDirectory)/../PrePatcher/Output/PrePatcher.exe&quot; --mmhook MMHOOK_Assembly-CSharp.dll MMHOOK_TeamCherry.TK2D.dll" />
+        <Exec WorkingDirectory="@(BuildDir)" Command="$(Mono) &quot;$(MSBuildProjectDirectory)/../PrePatcher/Output/PrePatcher.exe&quot; --mmhook MMHOOK_Assembly-CSharp.dll MMHOOK_TeamCherry.Cinematics.dll" />
     </Target>
 
     <Target Name="SetupExamples" AfterTargets="PostBuildEvent" Condition="'$(SetupExamples)' == 'true'">

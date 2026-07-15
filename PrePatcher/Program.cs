@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
@@ -12,12 +13,23 @@ namespace Prepatcher
     // ReSharper disable once ClassNeverInstantiated.Global
     internal class Program
     {
-        private static void Main(string[] args)
+        private static int Main(string[] args)
         {
+            if (args.Length > 0 && args[0] == "--mmhook")
+            {
+                if (args.Length != 3)
+                {
+                    Console.Error.WriteLine("Usage: PrePatcher.exe --mmhook <target-mmhook.dll> <source-mmhook.dll>");
+                    return 2;
+                }
+
+                return PatchMMHook(args[1], args[2]);
+            }
+
             if (args.Length < 2)
             {
-                Console.WriteLine("Usage: PrePatcher.exe <Original> <Patched>");
-                return;
+                Console.Error.WriteLine("Usage: PrePatcher.exe <Original> <Patched>");
+                return 2;
             }
 
             int changes = 0;
@@ -137,6 +149,97 @@ namespace Prepatcher
             module.Write(args[1]);
 
             Console.WriteLine("Changed " + changes + " get/set calls");
+            return 0;
+        }
+
+        private static int PatchMMHook(string targetPath, string sourcePath)
+        {
+            string targetFull = Path.GetFullPath(targetPath);
+            string sourceFull = Path.GetFullPath(sourcePath);
+            string tempPath = targetFull + ".tmp." + Guid.NewGuid().ToString("N");
+
+            if (!File.Exists(targetFull))
+            {
+                Console.Error.WriteLine("Target MMHOOK not found: " + targetFull);
+                return 2;
+            }
+            if (!File.Exists(sourceFull))
+            {
+                Console.Error.WriteLine("Source MMHOOK not found: " + sourceFull);
+                return 2;
+            }
+            if (string.Equals(targetFull, sourceFull, StringComparison.OrdinalIgnoreCase))
+            {
+                Console.Error.WriteLine("Target and source MMHOOK must be different files.");
+                return 2;
+            }
+
+            try
+            {
+                using DefaultAssemblyResolver resolver = new();
+                resolver.AddSearchDirectory(Path.GetDirectoryName(targetFull));
+                resolver.AddSearchDirectory(Path.GetDirectoryName(sourceFull));
+                ReaderParameters readerParameters = new() { AssemblyResolver = resolver };
+                int added;
+
+                using (ModuleDefinition target = ModuleDefinition.ReadModule(targetFull, readerParameters))
+                using (ModuleDefinition source = ModuleDefinition.ReadModule(sourceFull, readerParameters))
+                {
+                    TypeDefinition[] missingTypes = source.Types
+                        .Where(type => type.IsPublic)
+                        .Where(type => target.GetType(type.Namespace, type.Name) == null)
+                        .Where(type => target.ExportedTypes.All(exported =>
+                            exported.Namespace != type.Namespace || exported.Name != type.Name))
+                        .ToArray();
+
+                    if (missingTypes.Length == 0)
+                    {
+                        Console.WriteLine("Added 0 type forwarders from " + Path.GetFileName(sourceFull)
+                            + " into " + Path.GetFileName(targetFull));
+                        return 0;
+                    }
+
+                    AssemblyNameReference sourceReference = target.AssemblyReferences.FirstOrDefault(reference =>
+                        reference.Name == source.Assembly.Name.Name
+                        && reference.Version == source.Assembly.Name.Version);
+                    if (sourceReference == null)
+                    {
+                        sourceReference = new AssemblyNameReference(source.Assembly.Name.Name, source.Assembly.Name.Version)
+                        {
+                            Culture = source.Assembly.Name.Culture,
+                            PublicKeyToken = source.Assembly.Name.PublicKeyToken
+                        };
+                        target.AssemblyReferences.Add(sourceReference);
+                    }
+
+                    foreach (TypeDefinition type in missingTypes)
+                    {
+                        ExportedType exported = new(type.Namespace, type.Name, target, sourceReference)
+                        {
+                            Attributes = Mono.Cecil.TypeAttributes.Forwarder
+                        };
+                        target.ExportedTypes.Add(exported);
+                    }
+
+                    added = missingTypes.Length;
+                    target.Write(tempPath);
+                }
+
+                File.Replace(tempPath, targetFull, null);
+                Console.WriteLine("Added " + added + " type forwarders from " + Path.GetFileName(sourceFull)
+                    + " into " + Path.GetFileName(targetFull));
+                return 0;
+            }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine("MMHOOK forwarding failed: " + exception);
+                return 1;
+            }
+            finally
+            {
+                if (File.Exists(tempPath))
+                    File.Delete(tempPath);
+            }
         }
 
         /// <summary>
