@@ -16,6 +16,21 @@ Building the API is fairly straightforward.
 5. The patched assembly should be in `RepoPath/OutputFinal/hollow_knight_Data/Managed/` (There is also a zip file in `RepoPath/ModdingAPI.zip` ready to upload to Google Drive)
 6. Copy Assembly-CSharp.* to `%HollowKnightGameInstallPath%/hollow_knight_Data/Managed/`
 
+Safe Windows Build and Deployment (1.2.2.1-37)
+================================================
+
+Enable the Windows `.NET Framework 3.5` feature first. The PowerShell workflow validates the original `Assembly-CSharp.dll`, builds without the legacy auto-deploy/ZIP events, and verifies the v37 ABI.
+
+```powershell
+$game = 'D:\path\to\Hollow Knight'
+.\scripts\Build-LegacyApi.ps1 -ManagedPath "$game\hollow_knight_Data\Managed"
+.\scripts\Deploy-LegacyApi.ps1 -Action Status -GamePath $game
+.\scripts\Deploy-LegacyApi.ps1 -Action Install -GamePath $game
+.\scripts\Deploy-LegacyApi.ps1 -Action Restore -GamePath $game
+```
+
+Install requires the game to be closed. It creates a timestamped backup beside the repository before replacing files. Restore leaves all post-install `LocalLow` data untouched.
+
 Building The API for Mac!
 ============================
 Building the API is fairly straightforward. (Note that we're still building this in Windows, just using the Mac files for the game.)
