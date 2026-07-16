@@ -22,19 +22,19 @@ Release Compatibility
 How To Install
 ==============
 
-Navigate to your Hollow Knight Game Install folder.
+Navigate to the managed assembly folder inside your Hollow Knight installation.
 
-    Steam: C:\Program Files (x86)\Steam\steamapps\common\Hollow Knight\
-    GoG:
+    Steam: C:\Program Files (x86)\Steam\steamapps\common\Hollow Knight\hollow_knight_Data\Managed\
+    GoG: <Hollow Knight install folder>\hollow_knight_Data\Managed\
 
-Copy everything in this zip file into the game's folder. When prompted to overwrite files, say yes.
+Copy all 17 files from this zip directly into the `Managed` folder. When prompted to overwrite files, say yes.
 
 You may also use [Scarab](https://github.com/fifty-six/Scarab/releases/latest).
 
 安装方法
 ========
 
-打开 Hollow Knight 游戏安装目录，将压缩包内全部文件复制到该目录。出现覆盖提示时选择确认。
+打开 Hollow Knight 游戏安装目录下的 `hollow_knight_Data\Managed` 目录，将压缩包内 17 个文件直接复制到该目录。出现覆盖提示时选择确认。
 
 本版本仅在 Windows x64 上完成验证。安装前请备份存档和现有 Mod 配置。
 
